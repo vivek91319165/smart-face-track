@@ -6,12 +6,38 @@ import { useToast } from "@/components/ui/use-toast";
 import { Layout } from "@/components/Layout";
 import { Camera, User } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import * as tf from '@tensorflow/tfjs';
+import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
 
 const Record = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
+  const [model, setModel] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+
+  // Initialize TensorFlow.js and face detection model
+  useEffect(() => {
+    const initializeModel = async () => {
+      try {
+        await tf.ready();
+        const loadedModel = await faceLandmarksDetection.load(
+          faceLandmarksDetection.SupportedPackages.mediapipeFacemesh
+        );
+        setModel(loadedModel);
+      } catch (error) {
+        console.error("Error loading face detection model:", error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to load face detection model",
+        });
+      }
+    };
+
+    initializeModel();
+  }, [toast]);
 
   useEffect(() => {
     checkFaceRegistration();
@@ -24,11 +50,7 @@ const Record = () => {
         .select("face_encoding")
         .single();
 
-      if (profile?.face_encoding) {
-        setIsRegistering(false);
-      } else {
-        setIsRegistering(true);
-      }
+      setIsRegistering(!profile?.face_encoding);
     } catch (error) {
       console.error("Error checking face registration:", error);
     }
@@ -37,7 +59,7 @@ const Record = () => {
   const startCamera = async () => {
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
+        video: { facingMode: "user" },
       });
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
@@ -68,41 +90,109 @@ const Record = () => {
     };
   }, []);
 
+  const getFaceDescriptor = async (): Promise<Float32Array | null> => {
+    if (!videoRef.current || !model) return null;
+
+    const predictions = await model.estimateFaces({
+      input: videoRef.current,
+      returnTensors: false,
+      flipHorizontal: false,
+      predictIrises: false
+    });
+
+    if (predictions.length === 0) {
+      throw new Error("No face detected");
+    }
+
+    if (predictions.length > 1) {
+      throw new Error("Multiple faces detected");
+    }
+
+    // Convert landmarks to a normalized face descriptor
+    const landmarks = predictions[0].scaledMesh;
+    const tensorDescriptor = tf.tensor2d(landmarks);
+    const normalizedDescriptor = tensorDescriptor.mean(0);
+    const descriptor = await normalizedDescriptor.array();
+    tensorDescriptor.dispose();
+    normalizedDescriptor.dispose();
+
+    return new Float32Array(descriptor);
+  };
+
   const captureImage = async () => {
-    if (!videoRef.current) return;
+    if (!videoRef.current || !model) return;
 
-    const canvas = document.createElement("canvas");
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-
-    context.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-    const imageData = canvas.toDataURL("image/jpeg");
-
+    setIsLoading(true);
     try {
-      // Here you would typically:
-      // 1. Send the image to your backend for face encoding
-      // 2. Store the face encoding in the profiles table
-      // For now, we'll just store a placeholder
-      const { error } = await supabase
-        .from("profiles")
-        .update({ face_encoding: "placeholder_encoding" })
-        .eq("id", (await supabase.auth.getUser()).data.user?.id);
+      const faceDescriptor = await getFaceDescriptor();
+      
+      if (!faceDescriptor) {
+        throw new Error("Failed to get face descriptor");
+      }
 
-      if (error) throw error;
+      const descriptorBase64 = btoa(String.fromCharCode(...new Uint8Array(faceDescriptor.buffer)));
 
-      toast({
-        title: "Success",
-        description: "Face registered successfully!",
-      });
-      setIsRegistering(false);
+      if (isRegistering) {
+        // Store face encoding
+        const { error } = await supabase
+          .from("profiles")
+          .update({ face_encoding: descriptorBase64 })
+          .eq("id", (await supabase.auth.getUser()).data.user?.id);
+
+        if (error) throw error;
+
+        toast({
+          title: "Success",
+          description: "Face registered successfully!",
+        });
+        setIsRegistering(false);
+      } else {
+        // Verify face for attendance
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("face_encoding")
+          .single();
+
+        if (!profile?.face_encoding) {
+          throw new Error("No registered face found");
+        }
+
+        const storedDescriptor = new Float32Array(
+          new Uint8Array(
+            Array.from(atob(profile.face_encoding)).map(c => c.charCodeAt(0))
+          ).buffer
+        );
+
+        // Compare face descriptors
+        const distance = tf.tensor1d(faceDescriptor)
+          .sub(tf.tensor1d(storedDescriptor))
+          .norm()
+          .dataSync()[0];
+
+        if (distance > 0.6) { // Threshold for face similarity
+          throw new Error("Face verification failed");
+        }
+
+        // Record attendance
+        const { error } = await supabase
+          .from("attendance_records")
+          .insert({ user_id: (await supabase.auth.getUser()).data.user?.id });
+
+        if (error) throw error;
+
+        toast({
+          title: "Success",
+          description: "Attendance recorded successfully!",
+        });
+      }
     } catch (error: any) {
       toast({
         variant: "destructive",
         title: "Error",
         description: error.message,
       });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -121,14 +211,21 @@ const Record = () => {
             </p>
           </div>
 
-          <div className="aspect-video bg-black rounded-lg overflow-hidden mb-6">
+          <div className="aspect-video bg-black rounded-lg overflow-hidden mb-6 relative">
             {stream ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                className="w-full h-full object-cover"
-              />
+              <>
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-cover"
+                />
+                {isLoading && (
+                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                    <div className="text-white">Processing...</div>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="w-full h-full flex items-center justify-center">
                 <User className="w-16 h-16 text-gray-500" />
@@ -138,16 +235,20 @@ const Record = () => {
 
           <div className="flex justify-center gap-4">
             {!stream ? (
-              <Button onClick={startCamera} size="lg">
+              <Button onClick={startCamera} size="lg" disabled={!model}>
                 <Camera className="w-4 h-4 mr-2" />
-                Start Camera
+                {model ? "Start Camera" : "Loading..."}
               </Button>
             ) : (
               <>
                 <Button onClick={stopCamera} variant="outline" size="lg">
                   Stop Camera
                 </Button>
-                <Button onClick={captureImage} size="lg">
+                <Button 
+                  onClick={captureImage} 
+                  size="lg"
+                  disabled={isLoading}
+                >
                   {isRegistering ? "Register Face" : "Record Attendance"}
                 </Button>
               </>
