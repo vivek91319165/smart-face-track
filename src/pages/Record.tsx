@@ -100,8 +100,7 @@ const Record = () => {
     if (!videoRef.current || !model) return null;
 
     const faces = await model.estimateFaces(videoRef.current, {
-      flipHorizontal: false,
-      predictIrises: false
+      flipHorizontal: false
     });
 
     if (faces.length === 0) {
@@ -117,11 +116,11 @@ const Record = () => {
     const coordinates = keypoints.map(point => [point.x, point.y, point.z || 0]).flat();
     const tensorDescriptor = tf.tensor1d(coordinates);
     const normalizedDescriptor = tensorDescriptor.div(tf.scalar(tensorDescriptor.norm()));
-    const descriptor = await normalizedDescriptor.array();
+    const descriptorData = await normalizedDescriptor.data();
     tensorDescriptor.dispose();
     normalizedDescriptor.dispose();
 
-    return new Float32Array(descriptor);
+    return new Float32Array(descriptorData);
   };
 
   const captureImage = async () => {
@@ -135,9 +134,8 @@ const Record = () => {
         throw new Error("Failed to get face descriptor");
       }
 
-      const descriptorBuffer = faceDescriptor.buffer;
       const descriptorBase64 = btoa(
-        String.fromCharCode.apply(null, new Uint8Array(descriptorBuffer))
+        String.fromCharCode.apply(null, new Uint8Array(faceDescriptor.buffer))
       );
 
       if (isRegistering) {
