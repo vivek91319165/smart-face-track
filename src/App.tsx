@@ -9,6 +9,7 @@ import Record from "./pages/Record";
 import History from "./pages/History";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+import { ProtectedRoute } from "./components/ProtectedRoute";
 
 const queryClient = new QueryClient();
 
@@ -20,9 +21,23 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Index />} />
-          <Route path="/record" element={<Record />} />
-          <Route path="/history" element={<History />} />
           <Route path="/auth" element={<Auth />} />
+          <Route
+            path="/record"
+            element={
+              <ProtectedRoute>
+                <Record />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/history"
+            element={
+              <ProtectedRoute>
+                <History />
+              </ProtectedRoute>
+            }
+          />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

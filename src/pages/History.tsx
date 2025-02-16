@@ -1,23 +1,19 @@
 
+import { Layout } from "@/components/Layout";
 import { Card } from "@/components/ui/card";
-import { motion } from "framer-motion";
 
 const History = () => {
   return (
-    <div className="container py-8">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-4xl mx-auto"
-      >
-        <h1 className="text-3xl font-bold mb-8">Attendance History</h1>
+    <Layout>
+      <div className="max-w-4xl mx-auto">
         <Card className="p-6">
-          <p className="text-muted-foreground text-center py-8">
-            Attendance records will appear here once you start recording.
+          <h2 className="text-2xl font-bold mb-6">Attendance History</h2>
+          <p className="text-muted-foreground">
+            Your attendance records will appear here.
           </p>
         </Card>
-      </motion.div>
-    </div>
+      </div>
+    </Layout>
   );
 };
 
