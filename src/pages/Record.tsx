@@ -115,8 +115,13 @@ const Record = () => {
     const keypoints = faces[0].keypoints;
     const coordinates = keypoints.map(point => [point.x, point.y, point.z || 0]).flat();
     const tensorDescriptor = tf.tensor1d(coordinates);
-    const normalizedDescriptor = tensorDescriptor.div(tf.scalar(tensorDescriptor.norm()));
+    
+    // Calculate norm value first
+    const norm = tensorDescriptor.norm().dataSync()[0];
+    const normalizedDescriptor = tensorDescriptor.div(norm);
     const descriptorData = await normalizedDescriptor.data();
+    
+    // Clean up tensors
     tensorDescriptor.dispose();
     normalizedDescriptor.dispose();
 
