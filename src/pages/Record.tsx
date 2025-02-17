@@ -7,13 +7,13 @@ import { Layout } from "@/components/Layout";
 import { Camera, User } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import * as tf from '@tensorflow/tfjs';
-import * as blazeface from '@tensorflow-models/blazeface';
+import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
 
 const Record = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
-  const [model, setModel] = useState<blazeface.BlazeFaceModel | null>(null);
+  const [model, setModel] = useState<faceLandmarksDetection.FaceLandmarksDetector | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [lastDetectionTime, setLastDetectionTime] = useState<Date | null>(null);
   const { toast } = useToast();
@@ -23,7 +23,12 @@ const Record = () => {
     const initializeModel = async () => {
       try {
         await tf.ready();
-        const loadedModel = await blazeface.load();
+        const loadedModel = await faceLandmarksDetection.createDetector(
+          faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh,
+          {
+            runtime: 'tfjs',
+          }
+        );
         setModel(loadedModel);
       } catch (error) {
         console.error("Error loading face detection model:", error);
@@ -67,7 +72,8 @@ const Record = () => {
       
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
-        await videoRef.current.play(); // Ensure video is playing
+        videoRef.current.style.transform = 'scaleX(-1)'; // Mirror the video
+        await videoRef.current.play();
       }
       setStream(mediaStream);
 
@@ -111,47 +117,23 @@ const Record = () => {
       });
     }
 
-    // Create a temporary canvas to process the video frame
-    const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
+    // Get face detection results
+    const faces = await model.estimateFaces(videoRef.current);
 
-    // Draw current video frame to canvas
-    ctx.drawImage(videoRef.current, 0, 0);
-    
-    // Get predictions from the model
-    const predictions = await model.estimateFaces(canvas, false);
-
-    if (predictions.length === 0) {
+    if (faces.length === 0) {
       throw new Error("No face detected");
     }
 
-    if (predictions.length > 1) {
+    if (faces.length > 1) {
       throw new Error("Multiple faces detected");
     }
 
-    // Convert landmarks to a descriptor
-    const prediction = predictions[0];
-    const landmarksArray = Array.isArray(prediction.landmarks) 
-      ? prediction.landmarks 
-      : await prediction.landmarks.array();
-    const topLeft = Array.isArray(prediction.topLeft) 
-      ? prediction.topLeft 
-      : await prediction.topLeft.array();
-    const bottomRight = Array.isArray(prediction.bottomRight) 
-      ? prediction.bottomRight 
-      : await prediction.bottomRight.array();
+    // Get the first face detected
+    const face = faces[0];
     
-    // Flatten landmarks and add bounding box points
-    const landmarks = [
-      ...landmarksArray.flat(),
-      ...topLeft,
-      ...bottomRight
-    ];
-    
-    const tensorDescriptor = tf.tensor1d(landmarks);
+    // Convert keypoints to a descriptor
+    const keypoints = face.keypoints.map(kp => [kp.x, kp.y, kp.z || 0]).flat();
+    const tensorDescriptor = tf.tensor1d(keypoints);
     const norm = tensorDescriptor.norm().dataSync()[0];
     const normalizedDescriptor = tensorDescriptor.div(norm);
     const descriptorData = await normalizedDescriptor.data();
@@ -304,6 +286,7 @@ const Record = () => {
                   ref={videoRef}
                   autoPlay
                   playsInline
+                  muted
                   className="w-full h-full object-cover"
                 />
                 {isLoading && (
