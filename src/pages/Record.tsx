@@ -46,7 +46,7 @@ const Record = () => {
     try {
       const { data: profile } = await supabase
         .from("profiles")
-        .select("face_encoding")
+        .select("face_encoding, full_name")
         .single();
 
       setIsRegistering(!profile?.face_encoding);
@@ -58,10 +58,16 @@ const Record = () => {
   const startCamera = async () => {
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
+        video: { 
+          facingMode: "user",
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        },
       });
+      
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+        await videoRef.current.play(); // Ensure video is playing
       }
       setStream(mediaStream);
 
@@ -70,6 +76,7 @@ const Record = () => {
         startFaceDetectionLoop();
       }
     } catch (error: any) {
+      console.error("Camera error:", error);
       toast({
         variant: "destructive",
         title: "Camera Error",
@@ -80,7 +87,7 @@ const Record = () => {
 
   const stopCamera = () => {
     if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
+      stream.getTracks().forEach(track => track.stop());
       if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
@@ -97,7 +104,25 @@ const Record = () => {
   const getFaceDescriptor = async (): Promise<Float32Array | null> => {
     if (!videoRef.current || !model) return null;
 
-    const predictions = await model.estimateFaces(videoRef.current, false);
+    // Make sure video is ready
+    if (videoRef.current.readyState !== 4) {
+      await new Promise(resolve => {
+        videoRef.current!.onloadeddata = resolve;
+      });
+    }
+
+    // Create a temporary canvas to process the video frame
+    const canvas = document.createElement('canvas');
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    // Draw current video frame to canvas
+    ctx.drawImage(videoRef.current, 0, 0);
+    
+    // Get predictions from the model
+    const predictions = await model.estimateFaces(canvas, false);
 
     if (predictions.length === 0) {
       throw new Error("No face detected");
@@ -109,15 +134,15 @@ const Record = () => {
 
     // Convert landmarks to a descriptor
     const prediction = predictions[0];
-    let topLeft = Array.isArray(prediction.topLeft) 
-      ? prediction.topLeft 
-      : await prediction.topLeft.array();
-    let bottomRight = Array.isArray(prediction.bottomRight) 
-      ? prediction.bottomRight 
-      : await prediction.bottomRight.array();
     const landmarksArray = Array.isArray(prediction.landmarks) 
       ? prediction.landmarks 
       : await prediction.landmarks.array();
+    const topLeft = Array.isArray(prediction.topLeft) 
+      ? prediction.topLeft 
+      : await prediction.topLeft.array();
+    const bottomRight = Array.isArray(prediction.bottomRight) 
+      ? prediction.bottomRight 
+      : await prediction.bottomRight.array();
     
     // Flatten landmarks and add bounding box points
     const landmarks = [
@@ -154,7 +179,7 @@ const Record = () => {
             // Verify face for attendance
             const { data: profile } = await supabase
               .from("profiles")
-              .select("face_encoding")
+              .select("face_encoding, full_name")
               .single();
 
             if (!profile?.face_encoding) {
@@ -173,17 +198,23 @@ const Record = () => {
               .dataSync()[0];
 
             if (similarity >= 0.85) { // Threshold for face similarity
-              // Record attendance
+              const user = await supabase.auth.getUser();
+              // Record attendance with username
               const { error } = await supabase
                 .from("attendance_records")
-                .insert({ user_id: (await supabase.auth.getUser()).data.user?.id });
+                .insert({ 
+                  user_id: user.data.user?.id,
+                  username: profile.full_name || user.data.user?.email
+                });
 
               if (!error) {
                 setLastDetectionTime(new Date());
                 toast({
                   title: "Success",
-                  description: "Attendance recorded automatically!",
+                  description: `Attendance recorded for ${profile.full_name || user.data.user?.email}!`,
                 });
+              } else {
+                console.error("Error recording attendance:", error);
               }
             }
           }
@@ -222,11 +253,16 @@ const Record = () => {
         String.fromCharCode.apply(null, new Uint8Array(faceDescriptor.buffer))
       );
 
+      const user = await supabase.auth.getUser();
+      
       // Store face encoding
       const { error } = await supabase
         .from("profiles")
-        .update({ face_encoding: descriptorBase64 })
-        .eq("id", (await supabase.auth.getUser()).data.user?.id);
+        .update({ 
+          face_encoding: descriptorBase64,
+          full_name: user.data.user?.email?.split('@')[0] // Use email username as default name
+        })
+        .eq("id", user.data.user?.id);
 
       if (error) throw error;
 

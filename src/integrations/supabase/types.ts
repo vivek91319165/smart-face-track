@@ -15,22 +15,32 @@ export type Database = {
           id: string
           timestamp: string
           user_id: string
+          username: string | null
         }
         Insert: {
           created_at?: string
           id?: string
           timestamp?: string
           user_id: string
+          username?: string | null
         }
         Update: {
           created_at?: string
           id?: string
           timestamp?: string
           user_id?: string
+          username?: string | null
         }
         Relationships: [
           {
             foreignKeyName: "attendance_records_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fk_user_profile"
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"
