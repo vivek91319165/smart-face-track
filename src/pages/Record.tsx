@@ -1,34 +1,28 @@
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/use-toast";
 import { Layout } from "@/components/Layout";
-import { Camera, User } from "lucide-react";
+import { Camera } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import * as tf from '@tensorflow/tfjs';
 import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
+import { VideoDisplay } from "@/components/VideoDisplay";
+import { useCamera } from "@/hooks/useCamera";
+import { getFaceDescriptor, initializeFaceDetectionModel } from "@/utils/faceDetection";
 
 const Record = () => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const { videoRef, stream, startCamera, stopCamera } = useCamera();
   const [isRegistering, setIsRegistering] = useState(false);
   const [model, setModel] = useState<faceLandmarksDetection.FaceLandmarksDetector | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [lastDetectionTime, setLastDetectionTime] = useState<Date | null>(null);
   const { toast } = useToast();
 
-  // Initialize TensorFlow.js and face detection model
   useEffect(() => {
     const initializeModel = async () => {
       try {
-        await tf.ready();
-        const loadedModel = await faceLandmarksDetection.createDetector(
-          faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh,
-          {
-            runtime: 'tfjs',
-          }
-        );
+        const loadedModel = await initializeFaceDetectionModel();
         setModel(loadedModel);
       } catch (error) {
         console.error("Error loading face detection model:", error);
@@ -47,6 +41,12 @@ const Record = () => {
     checkFaceRegistration();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, [stopCamera]);
+
   const checkFaceRegistration = async () => {
     try {
       const { data: profile } = await supabase
@@ -60,98 +60,13 @@ const Record = () => {
     }
   };
 
-  const startCamera = async () => {
-    try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: "user",
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        },
-      });
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-        videoRef.current.style.transform = 'scaleX(-1)'; // Mirror the video
-        await videoRef.current.play();
-      }
-      setStream(mediaStream);
-
-      // Start face detection loop when camera starts
-      if (!isRegistering) {
-        startFaceDetectionLoop();
-      }
-    } catch (error: any) {
-      console.error("Camera error:", error);
-      toast({
-        variant: "destructive",
-        title: "Camera Error",
-        description: error.message,
-      });
-    }
-  };
-
-  const stopCamera = () => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-      setStream(null);
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      stopCamera();
-    };
-  }, []);
-
-  const getFaceDescriptor = async (): Promise<Float32Array | null> => {
-    if (!videoRef.current || !model) return null;
-
-    // Make sure video is ready
-    if (videoRef.current.readyState !== 4) {
-      await new Promise(resolve => {
-        videoRef.current!.onloadeddata = resolve;
-      });
-    }
-
-    // Get face detection results
-    const faces = await model.estimateFaces(videoRef.current);
-
-    if (faces.length === 0) {
-      throw new Error("No face detected");
-    }
-
-    if (faces.length > 1) {
-      throw new Error("Multiple faces detected");
-    }
-
-    // Get the first face detected
-    const face = faces[0];
-    
-    // Convert keypoints to a descriptor
-    const keypoints = face.keypoints.map(kp => [kp.x, kp.y, kp.z || 0]).flat();
-    const tensorDescriptor = tf.tensor1d(keypoints);
-    const norm = tensorDescriptor.norm().dataSync()[0];
-    const normalizedDescriptor = tensorDescriptor.div(norm);
-    const descriptorData = await normalizedDescriptor.data();
-    
-    // Clean up tensors
-    tensorDescriptor.dispose();
-    normalizedDescriptor.dispose();
-
-    return new Float32Array(descriptorData);
-  };
-
   const startFaceDetectionLoop = async () => {
-    if (isRegistering || !stream) return;
+    if (isRegistering || !stream || !videoRef.current || !model) return;
 
     const detectFace = async () => {
       try {
         if (!lastDetectionTime || Date.now() - lastDetectionTime.getTime() > 300000) { // 5 minutes cooldown
-          const faceDescriptor = await getFaceDescriptor();
+          const faceDescriptor = await getFaceDescriptor(videoRef.current, model);
           
           if (faceDescriptor) {
             const descriptorBase64 = btoa(
@@ -220,12 +135,24 @@ const Record = () => {
     }
   }, [stream, isRegistering]);
 
+  const handleStartCamera = async () => {
+    try {
+      await startCamera();
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Camera Error",
+        description: error.message,
+      });
+    }
+  };
+
   const registerFace = async () => {
     if (!videoRef.current || !model) return;
 
     setIsLoading(true);
     try {
-      const faceDescriptor = await getFaceDescriptor();
+      const faceDescriptor = await getFaceDescriptor(videoRef.current, model);
       
       if (!faceDescriptor) {
         throw new Error("Failed to get face descriptor");
@@ -279,32 +206,15 @@ const Record = () => {
             </p>
           </div>
 
-          <div className="aspect-video bg-black rounded-lg overflow-hidden mb-6 relative">
-            {stream ? (
-              <>
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                />
-                {isLoading && (
-                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                    <div className="text-white">Processing...</div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                <User className="w-16 h-16 text-gray-500" />
-              </div>
-            )}
-          </div>
+          <VideoDisplay 
+            videoRef={videoRef}
+            stream={stream}
+            isLoading={isLoading}
+          />
 
           <div className="flex justify-center gap-4">
             {!stream ? (
-              <Button onClick={startCamera} size="lg" disabled={!model}>
+              <Button onClick={handleStartCamera} size="lg" disabled={!model}>
                 <Camera className="w-4 h-4 mr-2" />
                 {model ? "Start Camera" : "Loading..."}
               </Button>
