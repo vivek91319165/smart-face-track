@@ -7,14 +7,13 @@ import { Layout } from "@/components/Layout";
 import { Camera, User } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import * as tf from '@tensorflow/tfjs';
-import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
-import { MediaPipeFaceMeshMediaPipeModelConfig } from "@tensorflow-models/face-landmarks-detection";
+import * as blazeface from '@tensorflow-models/blazeface';
 
 const Record = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
-  const [model, setModel] = useState<faceLandmarksDetection.FaceLandmarksDetector | null>(null);
+  const [model, setModel] = useState<blazeface.BlazeFaceModel | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
@@ -23,15 +22,8 @@ const Record = () => {
     const initializeModel = async () => {
       try {
         await tf.ready();
-        const model = await faceLandmarksDetection.createDetector(
-          faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh,
-          {
-            runtime: 'mediapipe',
-            refineLandmarks: true,
-            maxFaces: 1,
-          } as MediaPipeFaceMeshMediaPipeModelConfig
-        );
-        setModel(model);
+        const loadedModel = await blazeface.load();
+        setModel(loadedModel);
       } catch (error) {
         console.error("Error loading face detection model:", error);
         toast({
@@ -99,24 +91,25 @@ const Record = () => {
   const getFaceDescriptor = async (): Promise<Float32Array | null> => {
     if (!videoRef.current || !model) return null;
 
-    const faces = await model.estimateFaces(videoRef.current, {
-      flipHorizontal: false
-    });
+    const predictions = await model.estimateFaces(videoRef.current, false);
 
-    if (faces.length === 0) {
+    if (predictions.length === 0) {
       throw new Error("No face detected");
     }
 
-    if (faces.length > 1) {
+    if (predictions.length > 1) {
       throw new Error("Multiple faces detected");
     }
 
-    // Convert keypoints to a normalized face descriptor
-    const keypoints = faces[0].keypoints;
-    const coordinates = keypoints.map(point => [point.x, point.y, point.z || 0]).flat();
-    const tensorDescriptor = tf.tensor1d(coordinates);
+    // Convert landmarks to a descriptor
+    const prediction = predictions[0];
+    const landmarks = [
+      ...prediction.landmarks,
+      prediction.topLeft,
+      prediction.bottomRight
+    ].flat();
     
-    // Calculate norm value first
+    const tensorDescriptor = tf.tensor1d(landmarks);
     const norm = tensorDescriptor.norm().dataSync()[0];
     const normalizedDescriptor = tensorDescriptor.div(norm);
     const descriptorData = await normalizedDescriptor.data();
