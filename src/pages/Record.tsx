@@ -15,6 +15,7 @@ const Record = () => {
   const [isRegistering, setIsRegistering] = useState(false);
   const [model, setModel] = useState<blazeface.BlazeFaceModel | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [lastDetectionTime, setLastDetectionTime] = useState<Date | null>(null);
   const { toast } = useToast();
 
   // Initialize TensorFlow.js and face detection model
@@ -63,6 +64,11 @@ const Record = () => {
         videoRef.current.srcObject = mediaStream;
       }
       setStream(mediaStream);
+
+      // Start face detection loop when camera starts
+      if (!isRegistering) {
+        startFaceDetectionLoop();
+      }
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -103,6 +109,12 @@ const Record = () => {
 
     // Convert landmarks to a descriptor
     const prediction = predictions[0];
+    let topLeft = Array.isArray(prediction.topLeft) 
+      ? prediction.topLeft 
+      : await prediction.topLeft.array();
+    let bottomRight = Array.isArray(prediction.bottomRight) 
+      ? prediction.bottomRight 
+      : await prediction.bottomRight.array();
     const landmarksArray = Array.isArray(prediction.landmarks) 
       ? prediction.landmarks 
       : await prediction.landmarks.array();
@@ -110,8 +122,8 @@ const Record = () => {
     // Flatten landmarks and add bounding box points
     const landmarks = [
       ...landmarksArray.flat(),
-      ...prediction.topLeft,
-      ...prediction.bottomRight
+      ...topLeft,
+      ...bottomRight
     ];
     
     const tensorDescriptor = tf.tensor1d(landmarks);
@@ -126,7 +138,76 @@ const Record = () => {
     return new Float32Array(descriptorData);
   };
 
-  const captureImage = async () => {
+  const startFaceDetectionLoop = async () => {
+    if (isRegistering || !stream) return;
+
+    const detectFace = async () => {
+      try {
+        if (!lastDetectionTime || Date.now() - lastDetectionTime.getTime() > 300000) { // 5 minutes cooldown
+          const faceDescriptor = await getFaceDescriptor();
+          
+          if (faceDescriptor) {
+            const descriptorBase64 = btoa(
+              String.fromCharCode.apply(null, new Uint8Array(faceDescriptor.buffer))
+            );
+
+            // Verify face for attendance
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("face_encoding")
+              .single();
+
+            if (!profile?.face_encoding) {
+              throw new Error("No registered face found");
+            }
+
+            const storedDescriptorArray = Uint8Array.from(
+              atob(profile.face_encoding), c => c.charCodeAt(0)
+            );
+            
+            const storedDescriptor = new Float32Array(storedDescriptorArray.buffer);
+
+            // Compare face descriptors using cosine similarity
+            const similarity = tf.tensor1d(faceDescriptor)
+              .dot(tf.tensor1d(storedDescriptor))
+              .dataSync()[0];
+
+            if (similarity >= 0.85) { // Threshold for face similarity
+              // Record attendance
+              const { error } = await supabase
+                .from("attendance_records")
+                .insert({ user_id: (await supabase.auth.getUser()).data.user?.id });
+
+              if (!error) {
+                setLastDetectionTime(new Date());
+                toast({
+                  title: "Success",
+                  description: "Attendance recorded automatically!",
+                });
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Face detection error:", error);
+      }
+
+      // Continue the detection loop
+      if (stream) {
+        requestAnimationFrame(detectFace);
+      }
+    };
+
+    detectFace();
+  };
+
+  useEffect(() => {
+    if (stream && !isRegistering) {
+      startFaceDetectionLoop();
+    }
+  }, [stream, isRegistering]);
+
+  const registerFace = async () => {
     if (!videoRef.current || !model) return;
 
     setIsLoading(true);
@@ -141,58 +222,19 @@ const Record = () => {
         String.fromCharCode.apply(null, new Uint8Array(faceDescriptor.buffer))
       );
 
-      if (isRegistering) {
-        // Store face encoding
-        const { error } = await supabase
-          .from("profiles")
-          .update({ face_encoding: descriptorBase64 })
-          .eq("id", (await supabase.auth.getUser()).data.user?.id);
+      // Store face encoding
+      const { error } = await supabase
+        .from("profiles")
+        .update({ face_encoding: descriptorBase64 })
+        .eq("id", (await supabase.auth.getUser()).data.user?.id);
 
-        if (error) throw error;
+      if (error) throw error;
 
-        toast({
-          title: "Success",
-          description: "Face registered successfully!",
-        });
-        setIsRegistering(false);
-      } else {
-        // Verify face for attendance
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("face_encoding")
-          .single();
-
-        if (!profile?.face_encoding) {
-          throw new Error("No registered face found");
-        }
-
-        const storedDescriptorArray = Uint8Array.from(
-          atob(profile.face_encoding), c => c.charCodeAt(0)
-        );
-        
-        const storedDescriptor = new Float32Array(storedDescriptorArray.buffer);
-
-        // Compare face descriptors using cosine similarity
-        const similarity = tf.tensor1d(faceDescriptor)
-          .dot(tf.tensor1d(storedDescriptor))
-          .dataSync()[0];
-
-        if (similarity < 0.85) { // Threshold for face similarity
-          throw new Error("Face verification failed");
-        }
-
-        // Record attendance
-        const { error } = await supabase
-          .from("attendance_records")
-          .insert({ user_id: (await supabase.auth.getUser()).data.user?.id });
-
-        if (error) throw error;
-
-        toast({
-          title: "Success",
-          description: "Attendance recorded successfully!",
-        });
-      }
+      toast({
+        title: "Success",
+        description: "Face registered successfully!",
+      });
+      setIsRegistering(false);
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -210,12 +252,12 @@ const Record = () => {
         <Card className="p-6">
           <div className="text-center mb-6">
             <h2 className="text-2xl font-bold mb-2">
-              {isRegistering ? "Face Registration" : "Record Attendance"}
+              {isRegistering ? "Face Registration" : "Attendance Monitor"}
             </h2>
             <p className="text-muted-foreground">
               {isRegistering
                 ? "Let's set up your face recognition for future attendance"
-                : "Ready to record your attendance"}
+                : "Your attendance will be recorded automatically when your face is detected"}
             </p>
           </div>
 
@@ -252,13 +294,15 @@ const Record = () => {
                 <Button onClick={stopCamera} variant="outline" size="lg">
                   Stop Camera
                 </Button>
-                <Button 
-                  onClick={captureImage} 
-                  size="lg"
-                  disabled={isLoading}
-                >
-                  {isRegistering ? "Register Face" : "Record Attendance"}
-                </Button>
+                {isRegistering && (
+                  <Button 
+                    onClick={registerFace} 
+                    size="lg"
+                    disabled={isLoading}
+                  >
+                    Register Face
+                  </Button>
+                )}
               </>
             )}
           </div>
