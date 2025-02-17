@@ -103,11 +103,16 @@ const Record = () => {
 
     // Convert landmarks to a descriptor
     const prediction = predictions[0];
+    const landmarksArray = Array.isArray(prediction.landmarks) 
+      ? prediction.landmarks 
+      : await prediction.landmarks.array();
+    
+    // Flatten landmarks and add bounding box points
     const landmarks = [
-      ...prediction.landmarks,
-      prediction.topLeft,
-      prediction.bottomRight
-    ].flat();
+      ...landmarksArray.flat(),
+      ...prediction.topLeft,
+      ...prediction.bottomRight
+    ];
     
     const tensorDescriptor = tf.tensor1d(landmarks);
     const norm = tensorDescriptor.norm().dataSync()[0];
