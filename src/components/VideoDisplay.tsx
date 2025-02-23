@@ -1,5 +1,6 @@
 
 import { User } from "lucide-react";
+import { useEffect } from "react";
 
 interface VideoDisplayProps {
   videoRef: React.RefObject<HTMLVideoElement>;
@@ -8,6 +9,12 @@ interface VideoDisplayProps {
 }
 
 export const VideoDisplay = ({ videoRef, stream, isLoading }: VideoDisplayProps) => {
+  useEffect(() => {
+    if (stream && videoRef.current) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
   return (
     <div className="aspect-video bg-black rounded-lg overflow-hidden mb-6 relative">
       {stream ? (
