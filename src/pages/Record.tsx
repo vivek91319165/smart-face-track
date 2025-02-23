@@ -6,6 +6,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Layout } from "@/components/Layout";
 import { Camera } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import * as tf from '@tensorflow/tfjs';
 import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
 import { VideoDisplay } from "@/components/VideoDisplay";
 import { useCamera } from "@/hooks/useCamera";
