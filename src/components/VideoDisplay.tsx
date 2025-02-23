@@ -18,6 +18,10 @@ export const VideoDisplay = ({ videoRef, stream, isLoading }: VideoDisplayProps)
             playsInline
             muted
             className="w-full h-full object-cover"
+            style={{
+              transform: 'scaleX(-1)', // Mirror effect
+              WebkitTransform: 'scaleX(-1)' // For Safari support
+            }}
           />
           {isLoading && (
             <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
