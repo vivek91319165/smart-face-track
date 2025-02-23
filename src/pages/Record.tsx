@@ -23,7 +23,12 @@ const Record = () => {
   useEffect(() => {
     const initializeModel = async () => {
       try {
+        // Ensure TensorFlow.js is initialized
+        await tf.ready();
+        console.log('TensorFlow.js initialized');
+        
         const loadedModel = await initializeFaceDetectionModel();
+        console.log('Face detection model loaded');
         setModel(loadedModel);
       } catch (error) {
         console.error("Error loading face detection model:", error);
@@ -58,6 +63,20 @@ const Record = () => {
       setIsRegistering(!profile?.face_encoding);
     } catch (error) {
       console.error("Error checking face registration:", error);
+    }
+  };
+
+  const handleStartCamera = async () => {
+    try {
+      await startCamera();
+      console.log('Camera started successfully');
+    } catch (error: any) {
+      console.error('Camera start error:', error);
+      toast({
+        variant: "destructive",
+        title: "Camera Error",
+        description: error.message,
+      });
     }
   };
 
@@ -135,18 +154,6 @@ const Record = () => {
       startFaceDetectionLoop();
     }
   }, [stream, isRegistering]);
-
-  const handleStartCamera = async () => {
-    try {
-      await startCamera();
-    } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Camera Error",
-        description: error.message,
-      });
-    }
-  };
 
   const registerFace = async () => {
     if (!videoRef.current || !model) return;

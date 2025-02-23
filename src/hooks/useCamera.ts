@@ -18,7 +18,18 @@ export const useCamera = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
         videoRef.current.style.transform = 'scaleX(-1)'; // Mirror the video
+        
+        // Wait for the video to be loaded before playing
+        await new Promise((resolve) => {
+          if (videoRef.current) {
+            videoRef.current.onloadedmetadata = () => {
+              resolve(true);
+            };
+          }
+        });
+        
         await videoRef.current.play();
+        console.log('Video playing successfully');
       }
       setStream(mediaStream);
       return true;
