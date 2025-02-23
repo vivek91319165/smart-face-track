@@ -6,67 +6,62 @@ export const useCamera = () => {
   const [stream, setStream] = useState<MediaStream | null>(null);
 
   const startCamera = useCallback(async () => {
-    if (!videoRef.current) {
-      console.log("Waiting for video element...");
-      // Wait a bit for the video element to be available
-      await new Promise(resolve => setTimeout(resolve, 100));
-      if (!videoRef.current) {
-        throw new Error("Video element not found");
-      }
-    }
-
     try {
+      // Request camera access with more specific constraints
       const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: "user",
-          width: { ideal: 640 },
-          height: { ideal: 480 }
+        video: {
+          facingMode: 'user',
+          width: { min: 640, ideal: 1280, max: 1920 },
+          height: { min: 480, ideal: 720, max: 1080 },
+          aspectRatio: { ideal: 1.777777778 },
+          frameRate: { max: 30 }
         },
         audio: false
       });
 
-      // Set stream first
+      // Set stream in state first
       setStream(mediaStream);
-      
-      // Then setup video element
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-        videoRef.current.autoplay = true;
-        videoRef.current.playsInline = true;
-        videoRef.current.muted = true;
 
-        // Wait for metadata to be loaded
-        await new Promise<void>((resolve, reject) => {
-          if (!videoRef.current) {
-            reject(new Error("Video element not found"));
-            return;
-          }
-
-          const timeoutId = setTimeout(() => {
-            reject(new Error("Video metadata load timeout"));
-          }, 5000);
-
-          videoRef.current.onloadedmetadata = () => {
-            clearTimeout(timeoutId);
-            resolve();
-          };
-        });
-
-        try {
-          await videoRef.current.play();
-          console.log('Video started playing successfully');
-        } catch (playError) {
-          console.error('Error playing video:', playError);
-          throw playError;
-        }
+      // Make sure video element exists
+      if (!videoRef.current) {
+        throw new Error("Video element not available");
       }
+
+      // Configure video element
+      const videoElement = videoRef.current;
+      videoElement.srcObject = mediaStream;
+      videoElement.autoplay = true;
+      videoElement.playsInline = true;
+      videoElement.muted = true;
+
+      // Wait for video to be ready
+      await new Promise<void>((resolve) => {
+        const timeoutId = setTimeout(() => {
+          console.warn("Video load timeout - continuing anyway");
+          resolve();
+        }, 3000);
+
+        videoElement.onloadeddata = () => {
+          clearTimeout(timeoutId);
+          resolve();
+        };
+      });
+
+      // Start playing
+      await videoElement.play();
+      console.log("Camera started successfully");
 
       return true;
     } catch (error) {
-      console.error("Camera initialization error:", error);
+      console.error("Failed to start camera:", error);
+      // Clean up if there was an error
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        setStream(null);
+      }
       throw error;
     }
-  }, []);
+  }, [stream]);
 
   const stopCamera = useCallback(() => {
     if (stream) {
@@ -76,7 +71,6 @@ export const useCamera = () => {
       
       if (videoRef.current) {
         videoRef.current.srcObject = null;
-        videoRef.current.load(); // Reset the video element
       }
       
       setStream(null);
